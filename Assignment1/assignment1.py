@@ -489,3 +489,81 @@ res_final = modelo_final.fit(disp=False)
 prediccion_futura = res_final.get_forecast(steps=30)
 puntos_futuros = prediccion_futura.predicted_mean.clip(lower=0)
 intervalos = prediccion_futura.conf_int()
+
+#FORECASTING CON SARIMAX (con variables exógenas)
+
+# 1. Preparamos los datos históricos completos
+serie_datos = beijing_knn[beijing_knn['station'] == 'Gucheng'][columnas_num].resample('D').mean().ffill()
+
+# 2. Creamos el "Clima Promedio Histórico"
+# Agrupamos por mes y día para saber qué tiempo hace "normalmente" en cada fecha
+clima_estacional = serie_datos.groupby([serie_datos.index.month, serie_datos.index.day]).mean()
+
+# 3. Definimos el periodo a predecir (los 30 días siguientes al final de tus datos)
+fecha_inicio_futuro = serie_datos.index[-1] + pd.Timedelta(days=1)
+indice_futuro = pd.date_range(start=fecha_inicio_futuro, periods=30, freq='D')
+
+# 4. Construimos la 'exog_futura' extrayendo los promedios de esas fechas
+exog_futura = []
+for fecha in indice_futuro:
+    # Buscamos en nuestro 'clima_estacional' el promedio para ese mes/día
+    promedio_dia = clima_estacional.loc[(fecha.month, fecha.day)]
+    exog_futura.append(promedio_dia[['TEMP', 'WSPM', 'PRES', 'RAIN']])
+
+exog_futura = pd.DataFrame(exog_futura, index=indice_futuro)
+
+# 5. Entrenamos el modelo SARIMAX con TODO el historial y todas las variables
+y_historia = serie_datos['PM2.5']
+exog_historia = serie_datos[['TEMP', 'WSPM', 'PRES', 'RAIN']]
+
+modelo_final_x = sm.tsa.statespace.SARIMAX(y_historia,
+                                          exog=exog_historia,
+                                          order=(1, 1, 1),
+                                          seasonal_order=(1, 1, 1, 7),
+                                          enforce_stationarity=False)
+
+res_final_x = modelo_final_x.fit(disp=False)
+
+# 6. ¡PREDICCIÓN CON VARIABLES EXTERNAS!
+prediccion_x = res_final_x.get_forecast(steps=30, exog=exog_futura)
+puntos_futuros_x = prediccion_x.predicted_mean.clip(lower=0)
+intervalos_x = prediccion_x.conf_int()
+
+
+# 1. Recuperamos la predicción de SARIMA (Univariante)
+# Usamos el modelo 'res_final' que entrenamos con el 100% de y_final
+forecast_sarima = res_final.get_forecast(steps=30)
+puntos_sarima = forecast_sarima.predicted_mean.clip(lower=0)
+
+# 2. Preparamos los datos del año anterior (Marzo 2016) para la comparativa
+fecha_inicio_anterior = fecha_inicio_futuro - pd.DateOffset(years=1)
+indice_anterior = pd.date_range(start=fecha_inicio_anterior, periods=30, freq='D')
+datos_año_anterior = y_final.reindex(indice_anterior)
+datos_año_anterior.index = indice_futuro  # Alineamos el índice a 2017 para solaparlos
+
+# 3. Gráfica Comparativa Maestra
+plt.figure(figsize=(15, 8))
+
+# Datos Reales finales de 2016/17 (Contexto)
+plt.plot(y_final.index[-60:], y_final[-60:], label='Histórico Real (Contexto)', color='black', alpha=0.3)
+
+# Realidad del año anterior (Espejo)
+plt.plot(datos_año_anterior.index, datos_año_anterior, color='blue', linestyle='--', alpha=0.5, label='Realidad Marzo 2016')
+
+# Predicción SARIMA (Verde) - Solo patrones y pasado
+plt.plot(puntos_sarima.index, puntos_sarima, color='green', linewidth=2, label='Predicción SARIMA (Solo pasado)')
+
+# Predicción SARIMAX (Roja) - Pasado + Clima Promedio
+plt.plot(puntos_futuros_x.index, puntos_futuros_x, color='red', linewidth=2, label='Predicción SARIMAX (Con Clima)')
+
+# Sombra de incertidumbre (usamos la de SARIMAX por ser el modelo más complejo)
+plt.fill_between(puntos_futuros_x.index, 
+                 intervalos_x.iloc[:, 0].clip(lower=0), 
+                 intervalos_x.iloc[:, 1], color='red', alpha=0.05)
+
+plt.title("Comparativa de Modelos: ¿Cómo se comportará Marzo 2017?", fontsize=14)
+plt.ylabel("PM2.5")
+plt.legend()
+plt.grid(True, alpha=0.2)
+plt.show()
+# ----------------------------------------------------------------------------------------------------------------------------------------
