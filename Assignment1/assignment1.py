@@ -274,3 +274,93 @@ plt.gcf().autofmt_xdate()
 
 plt.show()
 
+# TIME SERIES ------------------------------------------------------------------------------------------------------------------------
+print("\n** TIME SERIES ANALYSIS **")
+
+# tenemos que asegurarnos de que los datos son estacionarios para aplicar SARIMA, por lo que primero haremos una descomposición para entender mejor la serie y luego 
+# aplicaremos el test de Dickey-Fuller para confirmar la estacionariedad.
+# 1. Filtramos la estación y el año específico
+estacion_un_año = beijing_knn[
+    (beijing_knn['station'] == sample_station) & 
+    (beijing_knn.index.year == 2014)
+]['PM2.5'].resample('D').mean()
+
+# 2. Manejo de posibles nulos (importante para la descomposición)
+estacion_un_año = estacion_un_año.ffill().bfill()
+
+# 3. Descomposición
+# Usamos period=7 para ver patrones semanales dentro de ese año
+res = seasonal_decompose(estacion_un_año, model='additive', period=7)
+
+# 4. Personalizar el gráfico
+fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(15, 10), sharex=True)
+res.observed.plot(ax=ax1, title=f'Análisis PM2.5 - {sample_station} (2014)')
+ax1.set_ylabel('Original')
+res.trend.plot(ax=ax2)
+ax2.set_ylabel('Tendencia')
+res.seasonal.plot(ax=ax3)
+ax3.set_ylabel('Estacionalidad')
+res.resid.plot(ax=ax4)
+ax4.set_ylabel('Residuos (Ruido)')
+
+plt.tight_layout()
+plt.show()
+
+#confirmamos la estacionariedad con el test de Dickey-Fuller
+def test_estacionariedad(serie):
+    print("Resultado del Test de Dickey-Fuller:")
+    resultado = adfuller(serie)
+    print(f'Estadístico ADF: {resultado[0]:.4f}')
+    print(f'p-valor: {resultado[1]:.4f}')
+    if resultado[1] <= 0.05:
+        print("Conclusión: La serie es estacionaria")
+    else:
+        print("Conclusión: La serie NO es estacionaria")
+
+test_estacionariedad(estacion_un_año)
+
+#
+
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
+
+# ACF nos ayuda a ver el parámetro 'q'
+plot_acf(estacion_un_año, lags=40, ax=ax1)
+# PACF nos ayuda a ver el parámetro 'p'
+plot_pacf(estacion_un_año, lags=40, ax=ax2)
+
+plt.tight_layout()
+plt.show()
+
+
+#SARIMA
+# 1. Definir la serie (Gucheng 2014)
+serie = estacion_un_año
+
+# 2. Dividir en Entrenamiento (Ene-Oct) y Prueba (Nov-Dic)
+train = serie[:'2014-10-31']
+test = serie['2014-11-01':]
+
+# 3. Configurar el modelo SARIMA
+# (p,d,q) x (P,D,Q,s)
+# Usamos (1,1,1) como base según tus gráficas
+model = sm.tsa.statespace.SARIMAX(train,
+                                order=(1, 1, 1),
+                                seasonal_order=(1, 1, 1, 7), 
+                                enforce_stationarity=False,
+                                enforce_invertibility=False)
+
+results = model.fit()
+
+# 4. Obtener la predicción
+forecast = results.get_forecast(steps=len(test))
+pred_mean = forecast.predicted_mean
+pred_mean_clipped = pred_mean.clip(lower=0)
+
+# 5. Graficar la realidad vs la predicción
+plt.figure(figsize=(12, 6))
+plt.plot(train.index, train, label='Entrenamiento')
+plt.plot(test.index, test, label='Real (Nov-Dic)', color='black', alpha=0.5)
+plt.plot(pred_mean.index, pred_mean, label='Predicción SARIMA', color='red')
+plt.title("Validación de SARIMA: Gucheng 2014")
+plt.legend()
+plt.show()
