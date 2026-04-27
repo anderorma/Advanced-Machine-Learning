@@ -364,3 +364,128 @@ plt.plot(pred_mean.index, pred_mean, label='Predicción SARIMA', color='red')
 plt.title("Validación de SARIMA: Gucheng 2014")
 plt.legend()
 plt.show()
+
+#SARIMAX 
+
+fecha_inicio_train = '2014-01-01'
+fecha_fin_train    = '2014-10-31'
+# 1. Definimos las columnas numéricas que necesitamos
+columnas_num = ['PM2.5', 'TEMP', 'WSPM', 'PRES', 'RAIN']
+
+# 2. Extraemos AMBAS variables asegurando que solo pedimos números antes del mean()
+datos_entrenamiento = beijing_knn[
+    (beijing_knn['station'] == 'Gucheng') & 
+    (beijing_knn.index >= fecha_inicio_train) & 
+    (beijing_knn.index <= fecha_fin_train)
+][columnas_num].resample('D').mean().ffill()  # <--- Agregado [columnas_num]
+
+train_y = datos_entrenamiento['PM2.5']
+train_exog = datos_entrenamiento[['TEMP', 'WSPM', 'PRES', 'RAIN']]  # <--- Agregado más variables exógenas
+
+# 3. Hacemos lo mismo para el set de TEST
+datos_test = beijing_knn[
+    (beijing_knn['station'] == 'Gucheng') & 
+    (beijing_knn.index > fecha_fin_train) & 
+    (beijing_knn.index <= '2014-12-31')
+][columnas_num].resample('D').mean().ffill()  # <--- Agregado [columnas_num]
+
+test_y = datos_test['PM2.5']
+test_exog = datos_test[['TEMP', 'WSPM', 'PRES', 'RAIN']]  # <--- Agregado más variables exógenas
+
+# 4. Ahora el modelo no debería dar error de alineación
+model_x = sm.tsa.statespace.SARIMAX(train_y,
+                                    exog=train_exog,
+                                    order=(1, 1, 1),
+                                    seasonal_order=(1, 1, 1, 7),
+                                    enforce_stationarity=False)
+
+results_x = model_x.fit(disp=False)
+
+# 5. Para predecir, TAMBIÉN pasamos el exog del periodo de test
+forecast_x = results_x.get_forecast(steps=len(test_y), exog=test_exog)
+pred_mean_x = forecast_x.predicted_mean
+pred_mean_x = pred_mean_x.clip(lower=0)
+
+plt.figure(figsize=(15, 7))
+
+# 1. Dibujamos los datos reales (Entrenamiento + Test)
+plt.plot(train_y.index, train_y, label='Entrenamiento (Histórico)', color='steelblue', alpha=0.7)
+plt.plot(test_y.index, test_y, label='Real (Validación)', color='black', linewidth=1.5)
+
+# 2. Dibujamos la predicción con variables exógenas
+plt.plot(pred_mean_x.index, pred_mean_x, label='Predicción SARIMAX (Con TEMP/WSPM/PRES/RAIN/DEWP)', color='red', linewidth=2)
+
+# 3. Formatos y detalles
+plt.title(f"Mejora con SARIMAX: Gucheng 2014", fontsize=14)
+plt.ylabel("Concentración PM2.5")
+plt.xlabel("Fecha")
+plt.legend()
+plt.grid(True, alpha=0.3)
+
+# Opcional: Zoom en la zona de predicción para ver mejor el detalle
+# plt.xlim(pd.Timestamp('2014-09-01'), pd.Timestamp('2014-12-31')) 
+
+plt.show()
+
+
+# Calculamos métricas
+rmse_sarima = np.sqrt(mean_squared_error(test, pred_mean_clipped))
+mae_sarima = mean_absolute_error(test, pred_mean_clipped)
+rmse_final = np.sqrt(mean_squared_error(test_y, pred_mean_x))
+mae_final = mean_absolute_error(test_y, pred_mean_x)
+
+print(f"Resultados Finales Gucheng 2014:")
+print("--- RESULTADOS SARIMA INICIAL (SOLO PASADO) ---")
+print(f"RMSE: {rmse_sarima:.2f}")
+print(f"MAE: {mae_sarima:.2f}")
+
+# 3. Comparación directa con tus resultados de SARIMAX (50.28 / 37.36)
+print("\n--- COMPARACIÓN CON SARIMAX ---")
+if rmse_sarima > 50.28:
+    print(f"El modelo SARIMAX redujo el error RMSE en {rmse_sarima - 50.28:.2f} puntos.")
+    print("La inclusión de variables climáticas mejoró la precisión.")
+else:
+    print("El modelo inicial fue más preciso, lo cual indicaría que el clima introdujo ruido.")
+
+
+# 1. Aseguramos que la predicción esté limpia y tenga el mismo índice que test_y
+prediccion_limpia = pred_mean_x.clip(lower=0)
+
+# 2. Calculamos los residuos
+residuos = test_y - prediccion_limpia
+
+# 3. ELIMINAMOS cualquier valor nulo que haya quedado (NaN) en ambos para que coincidan
+# Esto asegura que 'x' (el índice) y 'y' (el residuo) tengan el mismo tamaño
+residuos_plot = residuos.dropna()
+indice_plot = residuos_plot.index
+
+# 4. Graficamos usando los datos filtrados
+plt.figure(figsize=(12, 4))
+plt.scatter(indice_plot, residuos_plot, color='purple', alpha=0.5)
+plt.axhline(0, color='black', linestyle='--')
+plt.title("Análisis de Errores (Residuos) - SARIMAX")
+plt.ylabel("Error (Real - Predicho)")
+plt.show()
+
+
+#FORECASTING CON SARIMA 
+
+# 1. Asegúrate de que serie_completa contenga todas las columnas para tener los datos
+serie_datos = beijing_knn[beijing_knn['station'] == 'Gucheng'][columnas_num].resample('D').mean().ffill()
+
+# 2. SELECCIONA solo PM2.5 para el modelo (esto es el "univariate endog")
+y_final = serie_datos['PM2.5']
+
+# 3. Entrenamos con el 100% de los datos (Univariante)
+modelo_final = sm.tsa.statespace.SARIMAX(y_final, 
+                                        order=(1, 1, 1),
+                                        seasonal_order=(1, 1, 1, 7),
+                                        enforce_stationarity=False)
+
+res_final = modelo_final.fit(disp=False)
+
+# 2. Predecir los próximos 30 días "al vacío"
+# (Si es SARIMA simple, no necesitas exog)
+prediccion_futura = res_final.get_forecast(steps=30)
+puntos_futuros = prediccion_futura.predicted_mean.clip(lower=0)
+intervalos = prediccion_futura.conf_int()
