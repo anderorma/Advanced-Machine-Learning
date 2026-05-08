@@ -10,6 +10,8 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, classification_report, confusion_matrix, roc_curve
 import matplotlib.pyplot as plt
 import shap
+import lime
+import lime.lime_tabular
 
 RANDOM_STATE = 42
 np.random.seed(RANDOM_STATE)
@@ -254,9 +256,103 @@ def shap_analysis(lr_model, rf_model, X_train_scaled, X_test_scaled,
     plt.tight_layout()
     plt.show()
 
-    print("\n-------------------------------------------")
+    print("-------------------------------------------")
 
-    return lr_shap_values, rf_shap_values, lr_explainer, rf_explainer
+    return lr_shap_values, rf_shap_values
+
+
+def lime_analysis(lr_model, rf_model, X_train, X_test, X_train_scaled, X_test_scaled,
+                  y_test, lr_pred, rf_pred, feature_cols, df, scaler):
+    feature_cols = list(feature_cols)
+
+    print("\n6- LIME ANALYSIS")
+    print("-------------------------------------------")
+
+    lr_explainer = lime.lime_tabular.LimeTabularExplainer(
+        training_data=X_train_scaled,
+        feature_names=feature_cols,
+        class_names=["No Recidivism", "Recidivism"],
+        mode="classification",
+        random_state=RANDOM_STATE
+    )
+
+    rf_explainer = lime.lime_tabular.LimeTabularExplainer(
+        training_data=X_train,
+        feature_names=feature_cols,
+        class_names=["No Recidivism", "Recidivism"],
+        mode="classification",
+        random_state=RANDOM_STATE
+    )
+
+    # --- Parte 1: casos concretos (TP, FP, TN) ---
+    tp_idx = np.where((y_test == 1) & (lr_pred == 1))[0][0]
+    fp_idx = np.where((y_test == 0) & (lr_pred == 1))[0][0]
+    tn_idx = np.where((y_test == 0) & (lr_pred == 0))[0][0]
+
+    cases = {"True Positive": tp_idx, "False Positive": fp_idx, "True Negative": tn_idx}
+
+    for case_name, idx in cases.items():
+        print(f"\n  LR — {case_name} (index {idx})")
+        exp = lr_explainer.explain_instance(
+            X_test_scaled[idx], lr_model.predict_proba, num_features=len(feature_cols)
+        )
+        fig = exp.as_pyplot_figure()
+        fig.suptitle(f"LIME — Logistic Regression | {case_name}\n"
+                     f"True: {y_test[idx]}  |  Predicted: {lr_pred[idx]}", fontsize=10)
+        plt.tight_layout()
+        plt.show()
+
+        print(f"\n  RF — {case_name} (index {idx})")
+        exp = rf_explainer.explain_instance(
+            X_test[idx], rf_model.predict_proba, num_features=len(feature_cols)
+        )
+        fig = exp.as_pyplot_figure()
+        fig.suptitle(f"LIME — Random Forest | {case_name}\n"
+                     f"True: {y_test[idx]}  |  Predicted: {rf_pred[idx]}", fontsize=10)
+        plt.tight_layout()
+        plt.show()
+
+    # --- Parte 2: misma persona, distinta raza ---
+    feature_cols_list = list(feature_cols)
+    X_full = df[feature_cols_list].values
+    _, X_test_full, _, _ = train_test_split(
+        X_full, df["Two_yr_Recidivism"].values,
+        test_size=0.2, random_state=RANDOM_STATE, stratify=df["Two_yr_Recidivism"].values
+    )
+    df_test = pd.DataFrame(X_test_full, columns=feature_cols_list)
+
+    aa_indices = df_test.index[df_test["African_American"] == 1].tolist()
+    base_idx = aa_indices[0]
+    base_person = X_test[base_idx].copy()
+
+    person_aa = base_person.copy()
+    person_cau = base_person.copy()
+    aa_col_idx = feature_cols_list.index("African_American")
+    person_cau[aa_col_idx] = 0
+
+    print("\n  LIME — Racial comparison (same person, different race)")
+    print(f"  Base person features: {dict(zip(feature_cols_list, base_person))}")
+
+    for label, person in [("African American", person_aa), ("Caucasian", person_cau)]:
+        person_scaled = scaler.transform(person.reshape(1, -1))[0]
+
+        exp = lr_explainer.explain_instance(
+            person_scaled, lr_model.predict_proba, num_features=len(feature_cols)
+        )
+        fig = exp.as_pyplot_figure()
+        fig.suptitle(f"LIME — LR | Race: {label}", fontsize=10)
+        plt.tight_layout()
+        plt.show()
+
+        exp = rf_explainer.explain_instance(
+            person, rf_model.predict_proba, num_features=len(feature_cols)
+        )
+        fig = exp.as_pyplot_figure()
+        fig.suptitle(f"LIME — RF | Race: {label}", fontsize=10)
+        plt.tight_layout()
+        plt.show()
+
+    print("-------------------------------------------")
 
 
 if __name__ == "__main__":
@@ -276,6 +372,9 @@ if __name__ == "__main__":
 
     fairness_analysis(df, y_test, y_compas_test, lr_pred, rf_pred, feature_cols)
 
-    lr_shap_values, rf_shap_values, lr_explainer, rf_explainer = shap_analysis(
+    lr_shap_values, rf_shap_values = shap_analysis(
         lr_model, rf_model, X_train_scaled, X_test_scaled, X_train, X_test, feature_cols
     )
+
+    lime_analysis(lr_model, rf_model, X_train, X_test, X_train_scaled, X_test_scaled,
+                  y_test, lr_pred, rf_pred, feature_cols, df, scaler)
