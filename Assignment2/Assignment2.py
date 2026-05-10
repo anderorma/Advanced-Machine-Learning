@@ -13,17 +13,20 @@ import shap
 import lime
 import lime.lime_tabular
 
+# Set seed
 RANDOM_STATE = 42
 np.random.seed(RANDOM_STATE)
 
 
 def load_data(path: str) -> pd.DataFrame:
+    # Load data
     df = pd.read_csv(path)
     print(f"Dataset loaded: {df.shape[0]} rows, {df.shape[1]} columns")
     return df
 
 
 def preprocess(df: pd.DataFrame):
+    # Separate features from target and baseline score
     feature_cols = [c for c in df.columns
                     if c not in ("Two_yr_Recidivism", "score_factor")]
 
@@ -31,14 +34,17 @@ def preprocess(df: pd.DataFrame):
     y = df["Two_yr_Recidivism"].values
     y_compas = df["score_factor"].values
 
+    # Train/test split to maintain class distribution
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=RANDOM_STATE, stratify=y
     )
 
+    # Split the COMPAS scores to match the test set indices
     _, _, _, y_compas_test = train_test_split(
         X, y_compas, test_size=0.2, random_state=RANDOM_STATE, stratify=y
     )
 
+    # Scale features for logistic regression
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
@@ -58,6 +64,7 @@ def preprocess(df: pd.DataFrame):
 
 
 def plot_confusion_matrix(cm, title):
+    # Function to plot a colored confusion matrix
     fig, ax = plt.subplots()
     colors = np.array([["#90EE90", "#FF9999"],
                        ["#FF9999", "#90EE90"]])
@@ -79,12 +86,14 @@ def plot_confusion_matrix(cm, title):
 
 
 def train_logistic_regression(X_train_scaled, X_test_scaled, y_train, y_test, feature_cols):
+    # Train Logistic Regression with balanced weights for class imbalance
     lr = LogisticRegression(max_iter=1000, random_state=RANDOM_STATE, class_weight="balanced")
     lr.fit(X_train_scaled, y_train)
 
     y_pred = lr.predict(X_test_scaled)
     y_prob = lr.predict_proba(X_test_scaled)[:, 1]
 
+    # Evaluate and display metrics
     print("\n2- LOGISTIC REGRESSION")
     print("-------------------------------------------")
     print(f"Accuracy : {accuracy_score(y_test, y_pred):.4f}")
@@ -111,6 +120,7 @@ def train_logistic_regression(X_train_scaled, X_test_scaled, y_train, y_test, fe
 
 
 def train_random_forest(X_train, X_test, y_train, y_test):
+    # Train Random Forest ensemble model
     rf = RandomForestClassifier(n_estimators=200, max_depth=10,
                                 random_state=RANDOM_STATE, class_weight="balanced", n_jobs=-1)
     rf.fit(X_train, y_train)
@@ -118,6 +128,7 @@ def train_random_forest(X_train, X_test, y_train, y_test):
     y_pred = rf.predict(X_test)
     y_prob = rf.predict_proba(X_test)[:, 1]
 
+    # Evaluate and display metrics
     print("\n3- RANDOM FOREST")
     print("-------------------------------------------")
     print(f"Accuracy : {accuracy_score(y_test, y_pred):.4f}")
@@ -142,7 +153,8 @@ def train_random_forest(X_train, X_test, y_train, y_test):
 
     return rf, y_pred, y_prob
 
-# We aren't running a model for COMPAS since it's already given as a baseline, so we just evaluate its performance against the test set.
+
+# Evaluate its performance against the test set.
 def compas_baseline(y_test, y_compas_test):
     print("\nCOMPAS BASELINE")
     print("-------------------------------------------")
@@ -156,6 +168,7 @@ def compas_baseline(y_test, y_compas_test):
 
 
 def fairness_analysis(df, y_test, y_compas_test, lr_pred, rf_pred, feature_cols):
+    # Convert one-hot encoded races back to a single categorical column for grouping
     race_cols = ["African_American", "Asian", "Hispanic", "Native_American", "Other"]
 
     feature_cols_list = list(feature_cols)
@@ -164,22 +177,25 @@ def fairness_analysis(df, y_test, y_compas_test, lr_pred, rf_pred, feature_cols)
         X_full, df["Two_yr_Recidivism"].values,
         test_size=0.2, random_state=RANDOM_STATE, stratify=df["Two_yr_Recidivism"].values
     )
+    
+    # Rebuild test dataframe with predictions and true labels
     df_test = pd.DataFrame(X_test_full, columns=feature_cols_list)
     df_test["true"] = y_test
     df_test["lr_pred"] = lr_pred
     df_test["rf_pred"] = rf_pred
     df_test["compas_pred"] = y_compas_test
 
-    df_test["race"] = "Caucasian"
+    df_test["race"] = "Caucasian" # Default class
     for col in race_cols:
         df_test.loc[df_test[col] == 1, "race"] = col.replace("_", " ")
 
     print("\n4- FAIRNESS ANALYSIS — False Positive Rate by Race")
     print("-------------------------------------------")
 
+    # Calculate FPR and FNR per racial group to check for algorithmic bias
     results = []
     for race, grp in df_test.groupby("race"):
-        if len(grp) < 10:
+        if len(grp) < 10: # Skip groups that are too small for meaningful stats
             continue
         row = {"Race": race, "N": len(grp)}
         for model, col in [("LR", "lr_pred"), ("RF", "rf_pred"), ("COMPAS", "compas_pred")]:
@@ -192,10 +208,11 @@ def fairness_analysis(df, y_test, y_compas_test, lr_pred, rf_pred, feature_cols)
     print(results_df.to_string(index=False))
     print("-------------------------------------------")
 
+    # Plot FPR breakdown by race for all three models
     fig, axes = plt.subplots(1, 3, figsize=(15, 5), sharey=True)
     for ax, (model, col) in zip(axes, [("Logistic Regression", "FPR_LR"),
-                                        ("Random Forest", "FPR_RF"),
-                                        ("COMPAS", "FPR_COMPAS")]):
+                                       ("Random Forest", "FPR_RF"),
+                                       ("COMPAS", "FPR_COMPAS")]):
         sub = results_df.sort_values(col, ascending=True)
         bar_colors = ["#FF9999" if r == "African American" else "#90EE90" for r in sub["Race"]]
         ax.barh(sub["Race"], sub[col], color=bar_colors, edgecolor="black")
@@ -211,12 +228,13 @@ def fairness_analysis(df, y_test, y_compas_test, lr_pred, rf_pred, feature_cols)
 
 def shap_analysis(lr_model, rf_model, X_train_scaled, X_test_scaled,
                   X_train, X_test, feature_cols):
+    # Global Explainability: Calculate SHAP values to measure overall feature importance
     feature_cols = list(feature_cols)
 
     print("\n5- SHAP ANALYSIS")
     print("-------------------------------------------")
 
-    # --- Logistic Regression ---
+    # Logistic Regression SHAP
     print("  Computing SHAP values for Logistic Regression...")
     lr_explainer = shap.LinearExplainer(lr_model, X_train_scaled,
                                         feature_perturbation="interventional")
@@ -236,7 +254,7 @@ def shap_analysis(lr_model, rf_model, X_train_scaled, X_test_scaled,
     plt.tight_layout()
     plt.show()
 
-    # --- Random Forest ---
+    # Random Forest SHAP 
     print("  Computing SHAP values for Random Forest...")
     rf_explainer = shap.Explainer(rf_model, X_train)
     rf_shap_object = rf_explainer(X_test)
@@ -263,11 +281,13 @@ def shap_analysis(lr_model, rf_model, X_train_scaled, X_test_scaled,
 
 def lime_analysis(lr_model, rf_model, X_train, X_test, X_train_scaled, X_test_scaled,
                   y_test, lr_pred, rf_pred, feature_cols, df, scaler):
+    # Local Explainability: Use LIME to explain individual predictions
     feature_cols = list(feature_cols)
 
     print("\n6- LIME ANALYSIS")
     print("-------------------------------------------")
 
+    # Setup tabular explainers for both models
     lr_explainer = lime.lime_tabular.LimeTabularExplainer(
         training_data=X_train_scaled,
         feature_names=feature_cols,
@@ -284,7 +304,7 @@ def lime_analysis(lr_model, rf_model, X_train, X_test, X_train_scaled, X_test_sc
         random_state=RANDOM_STATE
     )
 
-    # --- Parte 1: casos concretos (TP, FP, TN) ---
+    # Part 1: Explain specific prediction types (TP, FP, TN)
     tp_idx = np.where((y_test == 1) & (lr_pred == 1))[0][0]
     fp_idx = np.where((y_test == 0) & (lr_pred == 1))[0][0]
     tn_idx = np.where((y_test == 0) & (lr_pred == 0))[0][0]
@@ -312,7 +332,7 @@ def lime_analysis(lr_model, rf_model, X_train, X_test, X_train_scaled, X_test_sc
         plt.tight_layout()
         plt.show()
 
-    # --- Parte 2: misma persona, distinta raza ---
+    # Part 2: Analysis (same person, flipping the race feature) 
     feature_cols_list = list(feature_cols)
     X_full = df[feature_cols_list].values
     _, X_test_full, _, _ = train_test_split(
@@ -321,10 +341,12 @@ def lime_analysis(lr_model, rf_model, X_train, X_test, X_train_scaled, X_test_sc
     )
     df_test = pd.DataFrame(X_test_full, columns=feature_cols_list)
 
+    # Grab the first African American individual in the test set
     aa_indices = df_test.index[df_test["African_American"] == 1].tolist()
     base_idx = aa_indices[0]
     base_person = X_test[base_idx].copy()
 
+    # Create two versions of the same person: one AA, one Caucasian
     person_aa = base_person.copy()
     person_cau = base_person.copy()
     aa_col_idx = feature_cols_list.index("African_American")
@@ -333,6 +355,7 @@ def lime_analysis(lr_model, rf_model, X_train, X_test, X_train_scaled, X_test_sc
     print("\n  LIME — Racial comparison (same person, different race)")
     print(f"  Base person features: {dict(zip(feature_cols_list, base_person))}")
 
+    # Generate LIME explanations for both versions to see if the model's logic shifts
     for label, person in [("African American", person_aa), ("Caucasian", person_cau)]:
         person_scaled = scaler.transform(person.reshape(1, -1))[0]
 
@@ -356,7 +379,9 @@ def lime_analysis(lr_model, rf_model, X_train, X_test, X_train_scaled, X_test_sc
 
 
 if __name__ == "__main__":
+    # Load the evaluation pipeline
     df = load_data("Assignment2/data/propublica_data_for_fairml.csv")
+    
     (X_train, X_test, X_train_scaled, X_test_scaled,
      y_train, y_test, y_compas_test, feature_cols, scaler) = preprocess(df)
 
