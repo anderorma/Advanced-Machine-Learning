@@ -142,7 +142,7 @@ def train_random_forest(X_train, X_test, y_train, y_test):
 
     return rf, y_pred, y_prob
 
-
+# We aren't running a model for COMPAS since it's already given as a baseline, so we just evaluate its performance against the test set.
 def compas_baseline(y_test, y_compas_test):
     print("\nCOMPAS BASELINE")
     print("-------------------------------------------")
@@ -356,7 +356,7 @@ def lime_analysis(lr_model, rf_model, X_train, X_test, X_train_scaled, X_test_sc
 
 
 if __name__ == "__main__":
-    df = load_data("data/propublica_data_for_fairml.csv")
+    df = load_data("Assignment2/data/propublica_data_for_fairml.csv")
     (X_train, X_test, X_train_scaled, X_test_scaled,
      y_train, y_test, y_compas_test, feature_cols, scaler) = preprocess(df)
 
